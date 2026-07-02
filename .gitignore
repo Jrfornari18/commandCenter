@@ -1,0 +1,11 @@
+node_modules/
+*/node_modules/
+frontend/build/
+.env
+backend/.env
+*.env
+!.env.example
+!backend/.env.example
+*.log
+.DS_Store
+postgres/data/
