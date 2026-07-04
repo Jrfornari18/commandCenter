@@ -1,0 +1,53 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: copastur_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: copastur_clevel
+      POSTGRES_USER: copastur
+      POSTGRES_PASSWORD: copastur123
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/001_schema.sql:/docker-entrypoint-initdb.d/001_schema.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL","pg_isready -U copastur -d copastur_clevel"]
+      interval: 10s; timeout: 5s; retries: 5
+    networks: [net]
+
+  backend:
+    build: { context: ./backend, dockerfile: Dockerfile }
+    container_name: copastur_api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: postgresql://copastur:copastur123@postgres:5432/copastur_clevel
+      CORS_ORIGIN: http://localhost:3000
+    depends_on: { postgres: { condition: service_healthy } }
+    ports: ["3001:3001"]
+    networks: [net]
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args: { REACT_APP_API_URL: /api }
+    container_name: copastur_web
+    restart: unless-stopped
+    ports: ["3000:80"]
+    depends_on: [backend]
+    networks: [net]
+
+volumes:
+  postgres_data:
+
+networks:
+  net:
+    driver: bridge
