@@ -134,7 +134,7 @@ router.post('/chat/conversations/:id/messages', authenticate, async (req, res) =
     const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 2048, system: SYSTEM_PROMPT, messages: history.map(m => ({ role: m.role, content: m.content })) })
+      body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: 2048, system: SYSTEM_PROMPT, messages: history.map(m => ({ role: m.role, content: m.content })) })
     });
     const aiData = await aiRes.json();
     const aiText = aiData.content?.[0]?.text || '{"simple":true,"text":"Erro ao obter resposta."}';
