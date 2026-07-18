@@ -14,7 +14,7 @@
 
 Plataforma executiva de suporte estratégico que consolida Azure DevOps, Freshservice,
 Microsoft Graph, Work/Plane TI Boards e SmartLeader OKRs em um único painel de comando,
-com IA (Claude Sonnet 4.6) avaliando cada decisão contra as 7 Expectativas de C-Level.
+com IA (Claude Sonnet 5) avaliando cada decisão contra as 7 Expectativas de C-Level.
 
 ---
 
@@ -231,7 +231,7 @@ ADO Org:           copastur-dev
 ADO API Version:   7.1
 Work Workspace:    copastur
 FS Domain:         copastur.freshservice.com
-AI Model:          claude-sonnet-4-6
+AI Model:          claude-sonnet-5
 DB Name:           copastur_clevel
 DB User:           copastur
 ```
@@ -718,7 +718,7 @@ POST   /api/users                   { email, full_name, role_name, password }
 2. INSERT messages (role='user', content)
 3. SELECT history FROM messages WHERE conversation_id ORDER BY created_at
 4. POST https://api.anthropic.com/v1/messages
-   - model: claude-sonnet-4-6
+   - model: claude-sonnet-5
    - system: SYSTEM_PROMPT (com 7 Expectativas + contexto Copastur)
    - messages: history completo
 5. Parse JSON response (extrair expectativas_aplicadas[])
@@ -811,7 +811,7 @@ docker compose up -d
 | Backend principal | Node.js 20 + Express (v2) | Simplicidade, performance, JavaScript unificado com frontend |
 | ORM | pg direto (Pool) | Sem overhead de ORM para queries simples |
 | Auth | JWT stateless | Sem necessidade de sessão server-side para API |
-| AI | Claude Sonnet 4.6 | Melhor análise executiva estruturada testada |
+| AI | Claude Sonnet 5 | Melhor análise executiva estruturada testada |
 | Orquestração | Docker Compose | Suficiente para escala atual; Kubernetes quando necessário |
 | Agent Layer | Sem LangGraph | Reavaliação quando tool count > 8 ou orquestração paralela necessária |
 | Secrets | Azure Key Vault (prod) | Padrão corporativo Copastur |
