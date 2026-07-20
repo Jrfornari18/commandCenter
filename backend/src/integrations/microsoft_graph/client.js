@@ -159,11 +159,59 @@ function getAuthUrl(state) {
     client_id: clientId,
     response_type: 'code',
     redirect_uri: redirectUri,
-    scope: 'openid profile email ' + (credentialStore.get('GRAPH_SCOPES') || 'User.Read Calendars.Read Mail.Read'),
+    scope: 'offline_access openid profile email ' + getScopeString(),
     state,
     response_mode: 'query'
   });
   return `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize?${params}`;
 }
 
-module.exports = { syncCalendar, syncEmail, getUpcomingEvents, getRecentEmails, sendEmail, getAuthUrl };
+function getScopeString() {
+  return (credentialStore.get('GRAPH_SCOPES') || 'User.Read Calendars.Read Mail.Read')
+    .split(/[,\s]+/).filter(Boolean).join(' ');
+}
+
+// Troca o authorization code (callback do redirect_uri) por access/refresh token
+async function exchangeCodeForToken(code, redirectUri) {
+  const tenantId = getTenantId();
+  try {
+    const res = await axios.post(
+      `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`,
+      new URLSearchParams({
+        client_id: credentialStore.get('AZURE_CLIENT_ID'),
+        client_secret: credentialStore.get('AZURE_CLIENT_SECRET'),
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: redirectUri,
+        scope: 'offline_access openid profile email ' + getScopeString()
+      }),
+      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 15000 }
+    );
+    return res.data;
+  } catch (err) {
+    await errorLog.logIntegrationError({ integration: 'microsoft_graph', operation: 'exchangeCodeForToken', err });
+    throw err;
+  }
+}
+
+// Persiste o token retornado pela troca de code — um registro por usuário
+async function saveGraphToken(userId, tokenData) {
+  const expiresAt = new Date(Date.now() + (tokenData.expires_in || 3600) * 1000);
+  const scopes = (tokenData.scope || '').split(' ').filter(Boolean);
+  await db.query(`
+    INSERT INTO graph_tokens (user_id, access_token, refresh_token, expires_at, scopes, tenant_id)
+    VALUES ($1,$2,$3,$4,$5,$6)
+    ON CONFLICT (user_id) DO UPDATE SET
+      access_token=EXCLUDED.access_token,
+      refresh_token=EXCLUDED.refresh_token,
+      expires_at=EXCLUDED.expires_at,
+      scopes=EXCLUDED.scopes,
+      updated_at=NOW()`,
+    [userId, tokenData.access_token, tokenData.refresh_token || null, expiresAt, scopes, getTenantId()]
+  );
+}
+
+module.exports = {
+  syncCalendar, syncEmail, getUpcomingEvents, getRecentEmails, sendEmail,
+  getAuthUrl, exchangeCodeForToken, saveGraphToken
+};

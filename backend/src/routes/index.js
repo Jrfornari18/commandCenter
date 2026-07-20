@@ -614,6 +614,59 @@ router.get('/integrations/graph/auth-url', authenticate, (req, res) => {
   res.json({ url });
 });
 
+/**
+ * @openapi
+ * /integrations/graph/callback:
+ *   post:
+ *     tags: [Integrations — Microsoft Graph]
+ *     summary: Troca o code recebido em https://commandcenter.copastur.com.br/auth/callback por tokens e conclui a conexão da conta Microsoft
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema: { type: object, required: [code, state], properties: { code: { type: string }, state: { type: string } } }
+ *     responses:
+ *       200: { description: OK, content: { application/json: { schema: { type: object, properties: { connected: { type: boolean } } } } } }
+ *       400: { description: state inválido, expirado ou de outro usuário, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+ *       500: { description: Erro, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+ */
+router.post('/integrations/graph/callback', authenticate, [
+  body('code').isString().trim().notEmpty(),
+  body('state').isString().trim().notEmpty()
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ error: errors.array()[0].msg });
+
+  let decodedState;
+  try {
+    decodedState = JSON.parse(Buffer.from(req.body.state, 'base64').toString('utf8'));
+  } catch (_) {
+    return res.status(400).json({ error: 'state inválido' });
+  }
+  if (decodedState.userId !== req.user.id) {
+    return res.status(400).json({ error: 'state não corresponde ao usuário autenticado' });
+  }
+  if (Date.now() - decodedState.ts > 10 * 60 * 1000) {
+    return res.status(400).json({ error: 'state expirado — reinicie a conexão com a Microsoft' });
+  }
+
+  try {
+    const redirectUri = credentialStore.get('AZURE_REDIRECT_URI');
+    const tokenData = await graphClient.exchangeCodeForToken(req.body.code, redirectUri);
+    await graphClient.saveGraphToken(req.user.id, tokenData);
+
+    await db.query(
+      `INSERT INTO audit_log (user_id, action, entity_type, entity_id, ip_address, metadata) VALUES ($1,'graph_oauth_connected','graph_tokens',$2,$3,$4)`,
+      [req.user.id, req.user.id, req.ip, JSON.stringify({ scope: tokenData.scope })]
+    );
+
+    res.json({ connected: true });
+  } catch (err) {
+    console.error('[GRAPH CALLBACK]', err.message);
+    res.status(500).json({ error: 'Erro ao concluir autenticação Microsoft' });
+  }
+});
+
 // SmartLeader / OKRs
 /**
  * @openapi

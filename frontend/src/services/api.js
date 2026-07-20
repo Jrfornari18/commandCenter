@@ -65,6 +65,7 @@ export const integAPI = {
   emails: () => API.get('/integrations/graph/email'),
   graphSync: () => API.post('/integrations/graph/sync'),
   graphAuthUrl: () => API.get('/integrations/graph/auth-url'),
+  graphCallback: (code, state) => API.post('/integrations/graph/callback', { code, state }),
   // OKR
   okrSummary: (cycle) => API.get('/integrations/okr/summary', { params: { cycle } }),
   okrSync: (cycle) => API.post('/integrations/okr/sync', { cycle })

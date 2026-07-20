@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import LoginPage from './pages/LoginPage';
 import AppPage from './pages/AppPage';
+import AuthCallbackPage from './pages/AuthCallbackPage';
 import './styles/global.css';
 
 function Private({ children }) {
@@ -22,6 +23,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     <AuthProvider>
       <Routes>
         <Route path="/login" element={<Public><LoginPage /></Public>} />
+        <Route path="/auth/callback" element={<AuthCallbackPage />} />
         <Route path="/" element={<Private><AppPage /></Private>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
