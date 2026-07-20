@@ -4,7 +4,7 @@
  * Write ops: requires_human_approval = true
  */
 const axios = require('axios');
-const db = require('../db');
+const db = require('../../db');
 
 const ADO_ORG = process.env.ADO_ORG || 'copastur-dev';
 const ADO_BASE = `https://dev.azure.com/${ADO_ORG}`;

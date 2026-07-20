@@ -5,7 +5,7 @@
  * Write ops: requires_human_approval = true
  */
 const axios = require('axios');
-const db = require('../db');
+const db = require('../../db');
 
 const DOMAIN = process.env.FRESHSERVICE_DOMAIN || 'copastur.freshservice.com';
 const API_KEY = process.env.FRESHSERVICE_API_KEY;

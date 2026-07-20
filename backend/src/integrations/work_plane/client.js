@@ -14,7 +14,7 @@
  * - Pagination: next_page_results + next_cursor (URL-encoded)
  */
 const axios = require('axios');
-const db = require('../db');
+const db = require('../../db');
 
 const BASE_URL = process.env.WORK_API_URL || 'https://work.cnext.app/api/plane/v1/workspaces/copastur';
 const TOKEN = process.env.WORK_TOKEN;

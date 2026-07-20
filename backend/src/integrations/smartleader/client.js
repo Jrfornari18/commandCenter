@@ -3,7 +3,7 @@
  * Aligned to 7 Expectativas de C-Level Copastur
  */
 const axios = require('axios');
-const db = require('../db');
+const db = require('../../db');
 
 const BASE_URL = process.env.SMARTLEADER_API_URL;
 const API_KEY = process.env.SMARTLEADER_API_KEY;

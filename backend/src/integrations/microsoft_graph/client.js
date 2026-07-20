@@ -5,7 +5,7 @@
  * Write ops: requires_human_approval = true
  */
 const axios = require('axios');
-const db = require('../db');
+const db = require('../../db');
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
 const TENANT_ID = process.env.AZURE_TENANT_ID || '5ffc8daf-9a54-46be-9c74-c98d30a2a81a';
