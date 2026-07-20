@@ -5,13 +5,13 @@
  */
 const axios = require('axios');
 const db = require('../../db');
+const credentialStore = require('../../services/credentialStore');
 
-const ADO_ORG = process.env.ADO_ORG || 'copastur-dev';
-const ADO_BASE = `https://dev.azure.com/${ADO_ORG}`;
-const PAT = process.env.ADO_PAT;
+const getAdoBase = () => `https://dev.azure.com/${credentialStore.get('ADO_ORG') || 'copastur-dev'}`;
+const getPat = () => credentialStore.get('ADO_PAT');
 
 const getHeaders = () => ({
-  'Authorization': `Basic ${Buffer.from(`:${PAT}`).toString('base64')}`,
+  'Authorization': `Basic ${Buffer.from(`:${getPat()}`).toString('base64')}`,
   'Content-Type': 'application/json'
 });
 
@@ -38,19 +38,19 @@ function extractWorkstream(iterationPath = '', tags = []) {
 
 // Split large date queries by month to respect 1000-item WIQL cap
 async function wiqlQueryPaged(project, wiql) {
-  if (!PAT) return { value: [] };
-  const url = `${ADO_BASE}/${encodeURIComponent(project)}/_apis/wit/wiql?api-version=7.1&$top=1000`;
+  if (!getPat()) return { value: [] };
+  const url = `${getAdoBase()}/${encodeURIComponent(project)}/_apis/wit/wiql?api-version=7.1&$top=1000`;
   const res = await axios.post(url, { query: wiql }, { headers: getHeaders(), timeout: 30000 });
   return res.data;
 }
 
 async function getWorkItemDetails(ids) {
-  if (!ids.length || !PAT) return [];
+  if (!ids.length || !getPat()) return [];
   const all = [];
   const fields = 'System.Id,System.Title,System.WorkItemType,System.State,System.AssignedTo,System.IterationPath,System.AreaPath,System.Tags,Microsoft.VSTS.Common.Priority,Microsoft.VSTS.Scheduling.StoryPoints,System.Parent,System.CreatedDate,System.ChangedDate,System.Tags';
   for (let i = 0; i < ids.length; i += 200) {
     const chunk = ids.slice(i, i + 200);
-    const url = `${ADO_BASE}/_apis/wit/workitems?ids=${chunk.join(',')}&fields=${fields}&api-version=7.1`;
+    const url = `${getAdoBase()}/_apis/wit/workitems?ids=${chunk.join(',')}&fields=${fields}&api-version=7.1`;
     const res = await axios.get(url, { headers: getHeaders(), timeout: 30000 });
     all.push(...(res.data.value || []));
   }

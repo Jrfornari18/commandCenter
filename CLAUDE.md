@@ -52,9 +52,17 @@ Nunca escrever, logar, commitar ou retornar em resposta API:
 - `WORK_TOKEN`
 - `SMARTLEADER_API_KEY`
 - `JWT_SECRET`
+- `CREDENTIALS_ENC_KEY`
 - Senhas de banco de dados
 
 Usar sempre variáveis de ambiente. Azure Key Vault em produção.
+
+As API keys de integração (seção 5) também podem ser configuradas via
+painel **Admin > API Keys** (`/api/admin/credentials`, admin-only). Ficam
+criptografadas (AES-256-GCM, chave = `CREDENTIALS_ENC_KEY`) na tabela
+`integration_credentials` e um valor salvo ali tem prioridade sobre o
+`.env`. As rotas de leitura NUNCA retornam o valor real — apenas os
+últimos 4 caracteres mascarados. Ver `backend/src/services/credentialStore.js`.
 
 ### 2.3 Gitignore — nunca commitar
 ```
@@ -219,7 +227,7 @@ CORS_ORIGIN=https://commandcenter.copastur.com.br
 # Cron Sync (produção)
 SYNC_ADO_CRON=0 */4 * * *
 SYNC_FS_CRON=0 */2 * * *
-SYNC_WORK_CRON=0 */3 * * *
+SYNC_WORK_CRON=*/15 * * * *
 SYNC_OKR_CRON=0 8 * * *
 SYNC_GRAPH_CRON=*/30 * * * *
 ```
@@ -817,6 +825,34 @@ docker compose up -d
 | Secrets | Azure Key Vault (prod) | Padrão corporativo Copastur |
 | Workstream grouping | IterationPath (não tags) | ADO Q2-2026 usa IterationPath como grouping primário |
 | Redis em DO | Key prefixes (não DB index) | Managed Valkey expõe apenas DB 0 |
+
+---
+
+## 18. Pasta `contexto/` — Cache de Execução
+
+Diretório na raiz do projeto (`contexto/`) que armazena, em Markdown, o
+histórico do que foi executado na criação e adaptação do commandCenter.
+
+```
+contexto/
+├── README.md              ← convenção (este item)
+└── YYYY-MM-DD-slug.md      ← um arquivo por execução relevante
+```
+
+**Regras:**
+- Toda execução relevante de criação/adaptação do sistema (feature nova,
+  mudança estrutural, integração, migração de schema, decisão de arquitetura)
+  gera um `.md` em `contexto/` nomeado `YYYY-MM-DD-slug-curto.md`.
+- Conteúdo mínimo de cada arquivo: o que foi feito, por quê, e quais
+  arquivos/serviços foram tocados. Sem prosa longa — objetivo e factual.
+- **Antes de rodar um build** (`docker compose build`, `docker compose up
+  --build`, etc.), releia os arquivos em `contexto/` para reconstituir o
+  estado acumulado do desenvolvimento — eles funcionam como cache de
+  execução entre sessões, já que o Claude Code não retém memória de
+  conversas anteriores automaticamente.
+- Não duplicar aqui o que já vive em CLAUDE.md (convenções, stack,
+  regras absolutas) — `contexto/` é para o histórico de execuções, não
+  para documentação permanente do projeto.
 
 ---
 

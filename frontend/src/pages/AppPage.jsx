@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { chatAPI, dashAPI, integAPI } from '../services/api';
+import { chatAPI, dashAPI, integAPI, credentialsAPI } from '../services/api';
 
 // ── Constants ──────────────────────────────────────────────────
 const EXPECTATIVAS = [
@@ -43,6 +43,7 @@ const I = {
   graph: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>,
   okr: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>,
   users: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>,
+  key: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="7.5" cy="15.5" r="5.5"/><path d="M21 2l-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"/></svg>,
   sync: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>,
   plus: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>,
   up: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>,
@@ -92,8 +93,21 @@ export default function AppPage() {
   const [workData, setWorkData] = useState({ boards: [], kpis: {}, issues: [] });
   const [okrData, setOkrData] = useState({ objectives: [] });
   const [graphData, setGraphData] = useState({ events: [], emails: [] });
+  const [credGroups, setCredGroups] = useState([]);
+  const [credEdits, setCredEdits] = useState({});
+  const [credSaving, setCredSaving] = useState({});
+  const [credMsg, setCredMsg] = useState({});
+  const [credTest, setCredTest] = useState({});
+  const [toast, setToast] = useState(null);
   const chatRef = useRef(null);
   const taRef = useRef(null);
+  const toastTimer = useRef(null);
+
+  const showToast = (type, message) => {
+    clearTimeout(toastTimer.current);
+    setToast({ type, message });
+    toastTimer.current = setTimeout(() => setToast(null), 4500);
+  };
 
   const fmtDate = d => d ? new Date(d).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }) : '—';
   const fmtTime = d => d ? new Date(d).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
@@ -108,6 +122,14 @@ export default function AppPage() {
     if (panel === 'okr') loadOkr();
     if (panel === 'graph') loadGraph();
     if (panel === 'admin') loadUsers();
+    if (panel === 'credentials') loadCredentials();
+  }, [panel]);
+
+  // Work TI Boards — poll leve (só lê o Postgres, não dispara sync no Plane) enquanto o painel estiver aberto
+  useEffect(() => {
+    if (panel !== 'work') return;
+    const id = setInterval(loadWork, 45000);
+    return () => clearInterval(id);
   }, [panel]);
 
   const loadConvs = async () => { try { const r = await chatAPI.list(); setConvs(r.data.conversations); } catch (_) {} };
@@ -115,14 +137,65 @@ export default function AppPage() {
   const loadAdo = async () => { try { const [ws, items] = await Promise.all([integAPI.adoWorkstreams(), integAPI.adoItems({ limit: 30 })]); setAdoData({ workstreams: ws.data.workstreams, items: items.data.items }); } catch (_) {} };
   const loadFs = async () => { try { const r = await integAPI.fsTickets(25); setFsData({ tickets: r.data.tickets, kpis: r.data.kpis }); } catch (_) {} };
   const loadWork = async () => { try { const [b, i] = await Promise.all([integAPI.workBoards(), integAPI.workIssues({ limit: 30 })]); setWorkData({ boards: b.data.boards, kpis: b.data.kpis, issues: i.data.issues }); } catch (_) {} };
-  const loadOkr = async () => { try { const r = await integAPI.okrSummary('Q2-2026'); setOkrData({ objectives: r.data.objectives }); } catch (_) {} };
+  const loadOkr = async () => { try { const r = await integAPI.okrSummary('Q2-2026'); setOkrData({ objectives: r.data.objectives, disabled: r.data.disabled }); } catch (_) {} };
   const loadGraph = async () => { try { const [ev, em] = await Promise.all([integAPI.calendarEvents(), integAPI.emails()]); setGraphData({ events: ev.data.events, emails: em.data.emails }); } catch (_) {} };
   const loadUsers = async () => { try { const r = await dashAPI.users(); setUsers(r.data.users); } catch (_) {} };
+  const loadCredentials = async () => { try { const r = await credentialsAPI.list(); setCredGroups(r.data.groups); } catch (_) {} };
+
+  const saveCredential = async (key) => {
+    const value = (credEdits[key] || '').trim();
+    if (!value) return;
+    setCredSaving(p => ({ ...p, [key]: true }));
+    setCredMsg(p => ({ ...p, [key]: null }));
+    try {
+      await credentialsAPI.save(key, value);
+      setCredEdits(p => ({ ...p, [key]: '' }));
+      setCredMsg(p => ({ ...p, [key]: 'ok' }));
+      await loadCredentials();
+    } catch (e) {
+      setCredMsg(p => ({ ...p, [key]: e.response?.data?.error || 'Erro ao salvar' }));
+    } finally {
+      setCredSaving(p => ({ ...p, [key]: false }));
+    }
+  };
+
+  const removeCredential = async (key) => {
+    setCredSaving(p => ({ ...p, [key]: true }));
+    try { await credentialsAPI.remove(key); await loadCredentials(); }
+    catch (e) { setCredMsg(p => ({ ...p, [key]: e.response?.data?.error || 'Erro ao remover' })); }
+    finally { setCredSaving(p => ({ ...p, [key]: false })); }
+  };
+
+  const testCredential = async (integration) => {
+    setCredTest(p => ({ ...p, [integration]: { testing: true } }));
+    try {
+      const r = await credentialsAPI.test(integration);
+      setCredTest(p => ({ ...p, [integration]: { testing: false, ok: r.data.ok, message: r.data.message } }));
+    } catch (e) {
+      setCredTest(p => ({ ...p, [integration]: { testing: false, ok: false, message: e.response?.data?.error || e.response?.data?.message || 'Erro ao testar conexão' } }));
+    }
+  };
 
   const syncAll = async () => {
     setSyncingAll(true);
-    try { await integAPI.syncAll(); await loadDash(); } catch (_) {}
-    finally { setSyncingAll(false); }
+    try {
+      await integAPI.syncAll();
+      await loadDash();
+      showToast('success', 'Todas as integrações foram sincronizadas com sucesso.');
+    } catch (e) {
+      showToast('error', e.response?.data?.error || 'Erro ao sincronizar as integrações.');
+    } finally {
+      setSyncingAll(false);
+    }
+  };
+
+  const runSync = async (fn, label) => {
+    try {
+      await fn();
+      showToast('success', `${label} sincronizado com sucesso.`);
+    } catch (e) {
+      showToast('error', e.response?.data?.error || `Erro ao sincronizar ${label}.`);
+    }
   };
 
   const openConv = async (id) => {
@@ -178,17 +251,27 @@ export default function AppPage() {
     { id: 'freshservice', label: 'Freshservice', icon: I.fs },
     { id: 'work', label: 'Work — TI Boards', icon: I.work, badge: '4 boards' },
     { id: 'graph', label: 'Microsoft Graph', icon: I.graph },
-    { id: 'okr', label: 'SmartLeader OKRs', icon: I.okr },
+    // SmartLeader OKRs — integração desativada (ver backend/src/config/integrationFlags.js)
   ];
-  const adminItems = user?.role_name === 'admin' ? [{ id: 'admin', label: 'Usuários', icon: I.users }] : [];
+  const adminItems = user?.role_name === 'admin' ? [
+    { id: 'admin', label: 'Usuários', icon: I.users },
+    { id: 'credentials', label: 'API Keys', icon: I.key }
+  ] : [];
 
-  const titles = { chat: 'Strategic Chat', dashboard: 'Executive Dashboard', expectativas: '7 Expectativas — Copastur', ado: 'Azure DevOps — copastur-dev', freshservice: 'Freshservice — ITSM', work: 'Work TI Boards — 4 Boards', graph: 'Microsoft Graph — Calendar & Email', okr: 'SmartLeader — OKRs', admin: 'Gestão de Usuários' };
+  const titles = { chat: 'Strategic Chat', dashboard: 'Executive Dashboard', expectativas: '7 Expectativas — Copastur', ado: 'Azure DevOps — copastur-dev', freshservice: 'Freshservice — ITSM', work: 'Work TI Boards — 4 Boards', graph: 'Microsoft Graph — Calendar & Email', okr: 'SmartLeader — OKRs', admin: 'Gestão de Usuários', credentials: 'Configurações — API Keys' };
 
   const priCol = p => p === 'critica' || p === 'urgent' ? 'rH' : p === 'alta' || p === 'high' ? 'rM' : 'rL';
   const priLbl = p => ({ critica:'Crítica', urgent:'Urgente', alta:'Alta', high:'Alta', media:'Média', medium:'Média', baixa:'Baixa', low:'Baixa' }[p] || p);
 
   return (
     <div className="app">
+      {toast && (
+        <div className={`toast toast-${toast.type}`} role="status">
+          <span className="toast-icon">{toast.type === 'success' ? '✓' : '✕'}</span>
+          <span>{toast.message}</span>
+          <button className="toast-close" onClick={() => setToast(null)} aria-label="Fechar">×</button>
+        </div>
+      )}
       {/* SIDEBAR */}
       <div className="sidebar">
         <div className="sb-head">
@@ -267,7 +350,7 @@ export default function AppPage() {
               <div className="msg assistant">
                 <div className="msg-lbl">AI Command Center · Copastur</div>
                 <div className="msg-bubble">
-                  <strong>Bem-vindo, {user?.full_name?.split(' ')[0]}.</strong> Plataforma integrada às 7 Expectativas de C-Level + Azure DevOps (copastur-dev · 186 proj) + Freshservice + Work TI Boards + Microsoft Graph + SmartLeader OKRs.<br /><br />
+                  <strong>Bem-vindo, {user?.full_name?.split(' ')[0]}.</strong> Plataforma integrada às 7 Expectativas de C-Level + Azure DevOps (copastur-dev · 186 proj) + Freshservice + Work TI Boards + Microsoft Graph.<br /><br />
                   Toda ação consequencial requer aprovação humana antes da execução. Apresente seu desafio.
                 </div>
               </div>
@@ -369,7 +452,7 @@ export default function AppPage() {
           <div className="panel-scroll">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
               <div className="sec-lbl" style={{ margin: 0 }}>Workstreams Q2/Q3 — copastur-dev</div>
-              <button className="integ-sync-btn" onClick={async () => { await integAPI.adoSync(); loadAdo(); }}>⟳ Sincronizar ADO</button>
+              <button className="integ-sync-btn" onClick={() => runSync(async () => { await integAPI.adoSync(); await loadAdo(); }, 'Azure DevOps')}>⟳ Sincronizar ADO</button>
             </div>
             <div className="metrics-grid" style={{ marginBottom: 16 }}>
               {[{ l: 'Workstreams', v: adoData.workstreams.length }, { l: 'Itens Recentes', v: adoData.items.length }].map((m, i) => <div key={i} className="metric-card"><div className="metric-lbl">{m.l}</div><div className="metric-val">{m.v}</div></div>)}
@@ -402,7 +485,7 @@ export default function AppPage() {
           <div className="panel-scroll">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
               <div className="sec-lbl" style={{ margin: 0 }}>Tickets — {process.env.REACT_APP_FS_DOMAIN || 'copastur.freshservice.com'}</div>
-              <button className="integ-sync-btn" onClick={async () => { await integAPI.fsSync(); loadFs(); }}>⟳ Sincronizar</button>
+              <button className="integ-sync-btn" onClick={() => runSync(async () => { await integAPI.fsSync(); await loadFs(); }, 'Freshservice')}>⟳ Sincronizar</button>
             </div>
             <div className="metrics-grid" style={{ marginBottom: 16 }}>
               {[
@@ -428,7 +511,7 @@ export default function AppPage() {
           <div className="panel-scroll">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
               <div className="sec-lbl" style={{ margin: 0 }}>TI Boards — work.cnext.app/copastur</div>
-              <button className="integ-sync-btn" onClick={async () => { await integAPI.workSync(); loadWork(); }}>⟳ Sincronizar</button>
+              <button className="integ-sync-btn" onClick={() => runSync(async () => { await integAPI.workSync(); await loadWork(); }, 'Work — TI Boards')}>⟳ Sincronizar</button>
             </div>
             <div className="metrics-grid" style={{ marginBottom: 16 }}>
               {[
@@ -467,8 +550,8 @@ export default function AppPage() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
               <div className="sec-lbl" style={{ margin: 0 }}>Tenant: 5ffc8daf-9a54-46be-9c74-c98d30a2a81a</div>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button className="integ-sync-btn" onClick={async () => { try { const r = await integAPI.graphAuthUrl(); window.open(r.data.url, '_blank'); } catch (_) {} }}>Conectar conta Microsoft</button>
-                <button className="integ-sync-btn" onClick={async () => { await integAPI.graphSync(); loadGraph(); }}>⟳ Sincronizar</button>
+                <button className="integ-sync-btn" onClick={async () => { try { const r = await integAPI.graphAuthUrl(); window.open(r.data.url, '_blank'); } catch (e) { showToast('error', e.response?.data?.error || 'Erro ao gerar URL de autenticação Microsoft.'); } }}>Conectar conta Microsoft</button>
+                <button className="integ-sync-btn" onClick={() => runSync(async () => { await integAPI.graphSync(); await loadGraph(); }, 'Microsoft Graph')}>⟳ Sincronizar</button>
               </div>
             </div>
             <div className="two-col">
@@ -499,9 +582,10 @@ export default function AppPage() {
           <div className="panel-scroll">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
               <div className="sec-lbl" style={{ margin: 0 }}>Objetivos Q2-2026 — SmartLeader</div>
-              <button className="integ-sync-btn" onClick={async () => { await integAPI.okrSync('Q2-2026'); loadOkr(); }}>⟳ Sincronizar OKRs</button>
+              {!okrData.disabled && <button className="integ-sync-btn" onClick={() => runSync(async () => { await integAPI.okrSync('Q2-2026'); await loadOkr(); }, 'SmartLeader OKRs')}>⟳ Sincronizar OKRs</button>}
             </div>
-            {(okrData.objectives || []).map((obj, i) => {
+            {okrData.disabled && <div style={{ color: 'var(--t2)', fontSize: 13, textAlign: 'center', padding: 40 }}>Integração SmartLeader desativada pelo Administrador.</div>}
+            {!okrData.disabled && (okrData.objectives || []).map((obj, i) => {
               const prog = Math.round(obj.progress || 0);
               const color = prog > 60 ? 'prog-green' : prog > 30 ? 'prog-amber' : 'prog-red';
               return (
@@ -515,7 +599,7 @@ export default function AppPage() {
                 </div>
               );
             })}
-            {!okrData.objectives?.length && <div style={{ color: 'var(--t2)', fontSize: 13, textAlign: 'center', padding: 40 }}>Configure SMARTLEADER_API_KEY para dados reais. Clique em Sincronizar para carregar dados mock.</div>}
+            {!okrData.disabled && !okrData.objectives?.length && <div style={{ color: 'var(--t2)', fontSize: 13, textAlign: 'center', padding: 40 }}>Configure SMARTLEADER_API_KEY para dados reais. Clique em Sincronizar para carregar dados mock.</div>}
           </div>
         </div>
 
@@ -530,6 +614,57 @@ export default function AppPage() {
                   <tr key={u.id}><td><div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><div className="avatar" style={{ width: 24, height: 24, fontSize: 9 }}>{u.avatar_initials}</div>{u.full_name}</div></td><td style={{ color: 'var(--t1)' }}>{u.email}</td><td><span className="tag tag-info">{u.role_label}</span></td><td style={{ color: 'var(--t2)' }}>{u.last_login_at ? fmtDate(u.last_login_at) : 'Nunca'}</td><td><span className={`tag ${u.is_active ? 'tag-ok' : 'tag-err'}`}>{u.is_active ? 'Ativo' : 'Inativo'}</span></td></tr>
                 ))}</tbody>
               </table>
+            </div>
+          </div>
+        )}
+
+        {/* ── ADMIN: API KEYS ─────────────────────────────────── */}
+        {user?.role_name === 'admin' && (
+          <div className={`panel ${panel === 'credentials' ? 'active' : ''}`}>
+            <div className="panel-scroll">
+              <p style={{ fontSize: 12, color: 'var(--t2)', marginBottom: 18, lineHeight: 1.6 }}>
+                Chaves armazenadas de forma criptografada (AES-256-GCM) no banco. Nunca são exibidas em texto puro após salvas — apenas os últimos 4 caracteres. Um valor salvo aqui tem prioridade sobre o `.env` do servidor.
+              </p>
+              {credGroups.map(group => (
+                <div key={group.integration} className="integ-card" style={{ marginBottom: 14 }}>
+                  <div className="integ-card-top" style={{ justifyContent: 'space-between' }}>
+                    <div><div className="integ-name">{group.label}</div></div>
+                    <button className="btn-sec" disabled={credTest[group.integration]?.testing} onClick={() => testCredential(group.integration)}>
+                      {credTest[group.integration]?.testing ? 'Testando...' : 'Testar conexão'}
+                    </button>
+                  </div>
+                  {credTest[group.integration] && !credTest[group.integration].testing && (
+                    <div style={{ fontSize: 11, marginTop: 6, marginBottom: 4, padding: '7px 10px', borderRadius: 'var(--r8)', color: credTest[group.integration].ok ? 'var(--green)' : 'var(--red)', background: credTest[group.integration].ok ? 'var(--green-bg)' : 'var(--red-bg)' }}>
+                      {credTest[group.integration].ok ? '✓ ' : '✕ '}{credTest[group.integration].message}
+                    </div>
+                  )}
+                  {group.fields.map(f => (
+                    <div key={f.key} style={{ display: 'flex', alignItems: 'flex-end', gap: 10, padding: '10px 0', borderTop: '.5px solid var(--b0)' }}>
+                      <div style={{ flex: 1 }}>
+                        <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span className={`status-dot ${f.configured ? 'dot-ok' : 'dot-idle'}`} />
+                          {f.label}
+                          <span className={`tag ${f.source === 'database' ? 'tag-ok' : f.source === 'env' ? 'tag-info' : 'tag-warn'}`} style={{ fontSize: 9 }}>
+                            {f.source === 'database' ? 'Salvo no painel' : f.source === 'env' ? 'Via .env' : 'Não configurado'}
+                          </span>
+                        </label>
+                        <input
+                          className="form-input"
+                          type={f.secret ? 'password' : 'text'}
+                          placeholder={f.secret ? (f.masked_value || 'Não configurado') : (f.masked_value || `Definir ${f.label.toLowerCase()}`)}
+                          value={credEdits[f.key] || ''}
+                          onChange={e => setCredEdits(p => ({ ...p, [f.key]: e.target.value }))}
+                        />
+                        {credMsg[f.key] && credMsg[f.key] !== 'ok' && <div style={{ color: 'var(--red)', fontSize: 11, marginTop: 4 }}>{credMsg[f.key]}</div>}
+                        {credMsg[f.key] === 'ok' && <div style={{ color: 'var(--green)', fontSize: 11, marginTop: 4 }}>Salvo com sucesso.</div>}
+                      </div>
+                      <button className="btn-primary" disabled={credSaving[f.key] || !credEdits[f.key]?.trim()} onClick={() => saveCredential(f.key)}>Salvar</button>
+                      {f.source === 'database' && <button className="btn-sec" disabled={credSaving[f.key]} onClick={() => removeCredential(f.key)}>Remover</button>}
+                    </div>
+                  ))}
+                </div>
+              ))}
+              {!credGroups.length && <div style={{ color: 'var(--t2)', fontSize: 13, textAlign: 'center', padding: 40 }}>Carregando...</div>}
             </div>
           </div>
         )}

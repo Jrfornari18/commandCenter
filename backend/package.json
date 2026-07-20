@@ -5,11 +5,7 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "nodemon src/server.js",
-    "sync:ado": "node src/jobs/sync-ado.js",
-    "sync:graph": "node src/jobs/sync-graph.js",
-    "sync:freshservice": "node src/jobs/sync-freshservice.js",
-    "sync:work": "node src/jobs/sync-work.js"
+    "dev": "nodemon src/server.js"
   },
   "dependencies": {
     "express": "^4.18.2",
@@ -25,7 +21,9 @@
     "morgan": "^1.10.0",
     "node-cron": "^3.0.3",
     "axios": "^1.6.5",
-    "@azure/msal-node": "^2.6.1"
+    "@azure/msal-node": "^2.6.1",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.1"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"

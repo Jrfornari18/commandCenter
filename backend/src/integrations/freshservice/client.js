@@ -6,14 +6,14 @@
  */
 const axios = require('axios');
 const db = require('../../db');
+const credentialStore = require('../../services/credentialStore');
 
-const DOMAIN = process.env.FRESHSERVICE_DOMAIN || 'copastur.freshservice.com';
-const API_KEY = process.env.FRESHSERVICE_API_KEY;
-const BASE_URL = `https://${DOMAIN}/api/v2`;
+const getBaseUrl = () => `https://${credentialStore.get('FRESHSERVICE_DOMAIN') || 'copastur.freshservice.com'}/api/v2`;
 
 function getHeaders() {
-  if (!API_KEY) return null;
-  const token = Buffer.from(`${API_KEY}:X`).toString('base64');
+  const apiKey = credentialStore.get('FRESHSERVICE_API_KEY');
+  if (!apiKey) return null;
+  const token = Buffer.from(`${apiKey}:X`).toString('base64');
   return { Authorization: `Basic ${token}`, 'Content-Type': 'application/json' };
 }
 
@@ -24,7 +24,7 @@ async function fetchTickets(filter = 'open', page = 1) {
   const headers = getHeaders();
   if (!headers) return getMockTickets();
   try {
-    const res = await axios.get(`${BASE_URL}/tickets`, {
+    const res = await axios.get(`${getBaseUrl()}/tickets`, {
       headers,
       params: { filter, page, per_page: 50, include: 'requester,responder,stats' },
       timeout: 15000

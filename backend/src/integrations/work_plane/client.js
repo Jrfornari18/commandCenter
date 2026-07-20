@@ -15,9 +15,9 @@
  */
 const axios = require('axios');
 const db = require('../../db');
+const credentialStore = require('../../services/credentialStore');
 
-const BASE_URL = process.env.WORK_API_URL || 'https://work.cnext.app/api/plane/v1/workspaces/copastur';
-const TOKEN = process.env.WORK_TOKEN;
+const getBaseUrl = () => credentialStore.get('WORK_API_URL') || 'https://work.cnext.app/api/plane/v1/workspaces/copastur';
 
 const TI_BOARDS = {
   '6b3ee0f0-eab1-49d4-a853-ef112b41bdab': 'Portfólio de Soluções de TI',
@@ -27,7 +27,8 @@ const TI_BOARDS = {
 };
 
 function getHeaders() {
-  return TOKEN ? { 'X-API-Key': TOKEN, 'Content-Type': 'application/json' } : null;
+  const token = credentialStore.get('WORK_TOKEN');
+  return token ? { 'X-API-Key': token, 'Content-Type': 'application/json' } : null;
 }
 
 async function paginatedFetch(url, params = {}) {
@@ -50,43 +51,61 @@ async function paginatedFetch(url, params = {}) {
   return results;
 }
 
+const ISSUE_BATCH_SIZE = 200; // ~13 params/row — keeps well under Postgres' bound-param limit
+
+async function upsertIssuesBatch(issues, projectId) {
+  for (let i = 0; i < issues.length; i += ISSUE_BATCH_SIZE) {
+    const chunk = issues.slice(i, i + ISSUE_BATCH_SIZE);
+    const params = [];
+    const rows = chunk.map(issue => {
+      const values = [
+        issue.id, projectId, issue.sequence_id, issue.name || issue.title,
+        issue.state_detail?.name || issue.state,
+        issue.state_detail?.group || null,
+        issue.priority, issue.due_date, issue.start_date,
+        issue.estimate, issue.created_at, issue.updated_at,
+        JSON.stringify(issue)
+      ];
+      const base = params.length;
+      params.push(...values);
+      return `(${values.map((_, j) => `$${base + j + 1}`).join(',')}, NOW())`;
+    });
+
+    await db.query(`
+      INSERT INTO work_issues (plane_id, project_plane_id, sequence_id, title, state, state_group,
+        priority, due_date, start_date, estimate, created_at_plane, updated_at_plane, raw_data, synced_at)
+      VALUES ${rows.join(',')}
+      ON CONFLICT (plane_id) DO UPDATE SET
+        title=EXCLUDED.title, state=EXCLUDED.state, state_group=EXCLUDED.state_group,
+        priority=EXCLUDED.priority, updated_at_plane=EXCLUDED.updated_at_plane,
+        raw_data=EXCLUDED.raw_data, synced_at=NOW()`,
+      params
+    );
+  }
+}
+
+async function syncBoard(projectId, projectName) {
+  await db.query(`
+    INSERT INTO work_projects (plane_id, name, is_ti_board, synced_at)
+    VALUES ($1, $2, TRUE, NOW())
+    ON CONFLICT (plane_id) DO UPDATE SET name=EXCLUDED.name, synced_at=NOW()`,
+    [projectId, projectName]
+  );
+
+  const issues = await paginatedFetch(`${getBaseUrl()}/projects/${projectId}/issues/`, { expand: 'state' });
+  if (issues.length) await upsertIssuesBatch(issues, projectId);
+  return issues.length;
+}
+
 async function syncTIBoards() {
   const headers = getHeaders();
   if (!headers) return { synced: 0, mock: true };
 
-  let totalSynced = 0;
-
-  for (const [projectId, projectName] of Object.entries(TI_BOARDS)) {
-    // Upsert project
-    await db.query(`
-      INSERT INTO work_projects (plane_id, name, is_ti_board, synced_at)
-      VALUES ($1, $2, TRUE, NOW())
-      ON CONFLICT (plane_id) DO UPDATE SET name=EXCLUDED.name, synced_at=NOW()`,
-      [projectId, projectName]
-    );
-
-    // Fetch issues with state expansion
-    const issues = await paginatedFetch(`${BASE_URL}/projects/${projectId}/issues/`, { expand: 'state' });
-
-    for (const issue of issues) {
-      await db.query(`
-        INSERT INTO work_issues (plane_id, project_plane_id, sequence_id, title, state, state_group,
-          priority, due_date, start_date, estimate, created_at_plane, updated_at_plane, raw_data, synced_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
-        ON CONFLICT (plane_id) DO UPDATE SET
-          title=EXCLUDED.title, state=EXCLUDED.state, state_group=EXCLUDED.state_group,
-          priority=EXCLUDED.priority, updated_at_plane=EXCLUDED.updated_at_plane,
-          raw_data=EXCLUDED.raw_data, synced_at=NOW()`,
-        [issue.id, projectId, issue.sequence_id, issue.name || issue.title,
-         issue.state_detail?.name || issue.state,
-         issue.state_detail?.group || null,
-         issue.priority, issue.due_date, issue.start_date,
-         issue.estimate, issue.created_at, issue.updated_at,
-         JSON.stringify(issue)]
-      );
-      totalSynced++;
-    }
-  }
+  // Os 4 boards são independentes — buscar e gravar em paralelo em vez de sequencial
+  const counts = await Promise.all(
+    Object.entries(TI_BOARDS).map(([projectId, projectName]) => syncBoard(projectId, projectName))
+  );
+  const totalSynced = counts.reduce((a, b) => a + b, 0);
 
   await db.query(`UPDATE integration_sync SET status='success', last_sync_at=NOW(), items_synced=$1 WHERE integration='work_plane'`, [totalSynced]);
   return { synced: totalSynced };

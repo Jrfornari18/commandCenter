@@ -70,4 +70,11 @@ export const integAPI = {
   okrSync: (cycle) => API.post('/integrations/okr/sync', { cycle })
 };
 
+export const credentialsAPI = {
+  list: () => API.get('/admin/credentials'),
+  save: (key_name, value) => API.put('/admin/credentials', { key_name, value }),
+  remove: (key_name) => API.delete(`/admin/credentials/${key_name}`),
+  test: (integration) => API.post(`/admin/credentials/test/${integration}`)
+};
+
 export default API;

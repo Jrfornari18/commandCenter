@@ -4,19 +4,18 @@
  */
 const axios = require('axios');
 const db = require('../../db');
-
-const BASE_URL = process.env.SMARTLEADER_API_URL;
-const API_KEY = process.env.SMARTLEADER_API_KEY;
+const credentialStore = require('../../services/credentialStore');
 
 function getHeaders() {
-  return API_KEY ? { 'Authorization': `Bearer ${API_KEY}`, 'Content-Type': 'application/json' } : null;
+  const apiKey = credentialStore.get('SMARTLEADER_API_KEY');
+  return apiKey ? { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' } : null;
 }
 
 async function fetchOKRs(cycle = 'Q2-2026') {
   const headers = getHeaders();
   if (!headers) return getMockOKRs(cycle);
   try {
-    const res = await axios.get(`${BASE_URL}/objectives`, { headers, params: { cycle }, timeout: 15000 });
+    const res = await axios.get(`${credentialStore.get('SMARTLEADER_API_URL')}/objectives`, { headers, params: { cycle }, timeout: 15000 });
     return res.data.objectives || res.data || [];
   } catch (err) {
     console.warn('[SmartLeader] API unavailable, using mock data:', err.message);
