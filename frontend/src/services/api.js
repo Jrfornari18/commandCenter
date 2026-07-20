@@ -77,4 +77,11 @@ export const credentialsAPI = {
   test: (integration) => API.post(`/admin/credentials/test/${integration}`)
 };
 
+export const errorLogAPI = {
+  list: (params) => API.get('/admin/integration-errors', { params }),
+  fixRequests: () => API.get('/admin/fix-requests'),
+  createFixRequest: (payload) => API.post('/admin/fix-requests', payload),
+  updateFixRequest: (id, status) => API.patch(`/admin/fix-requests/${id}`, { status })
+};
+
 export default API;

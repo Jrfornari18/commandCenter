@@ -7,6 +7,7 @@
 const axios = require('axios');
 const db = require('../../db');
 const credentialStore = require('../../services/credentialStore');
+const errorLog = require('../../services/errorLog');
 
 const getBaseUrl = () => `https://${credentialStore.get('FRESHSERVICE_DOMAIN') || 'copastur.freshservice.com'}/api/v2`;
 
@@ -32,6 +33,7 @@ async function fetchTickets(filter = 'open', page = 1) {
     return res.data.tickets || [];
   } catch (err) {
     console.error('[Freshservice]', err.message);
+    await errorLog.logIntegrationError({ integration: 'freshservice', operation: 'fetchTickets', err });
     return getMockTickets();
   }
 }

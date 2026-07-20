@@ -12,6 +12,8 @@ const okrClient = require('../integrations/smartleader/client');
 const credentialStore = require('../services/credentialStore');
 const credentialTest = require('../services/credentialTest');
 const syncRoutine = require('../services/syncRoutine');
+const errorLog = require('../services/errorLog');
+const fixRequestFile = require('../services/fixRequestFile');
 const { SMARTLEADER_ENABLED } = require('../config/integrationFlags');
 
 const router = express.Router();
@@ -252,6 +254,12 @@ router.post('/chat/conversations/:id/messages', authenticate, async (req, res) =
       body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 2048, system: SYSTEM_PROMPT, messages: history.map(m => ({ role: m.role, content: m.content })) })
     });
     const aiData = await aiRes.json();
+    if (!aiRes.ok) {
+      await errorLog.logIntegrationError({
+        integration: 'anthropic', operation: 'chat_completion',
+        err: { response: { status: aiRes.status, data: aiData } }
+      });
+    }
     const aiText = aiData.content?.[0]?.text || '{"simple":true,"text":"Erro ao obter resposta."}';
 
     let parsed = null;
@@ -996,6 +1004,141 @@ router.post('/admin/credentials/test/:integration', authenticate, requireAdmin, 
     console.error('[ADMIN CREDENTIALS TEST]', err.message);
     res.status(500).json({ ok: false, message: 'Erro interno ao testar credencial' });
   }
+});
+
+// ================================================================
+// ADMIN — Log de Erros de Integração
+// ================================================================
+
+/**
+ * @openapi
+ * /admin/integration-errors:
+ *   get:
+ *     tags: [Admin — Logs de Integração]
+ *     summary: Lista os erros mais recentes de chamadas a APIs externas (ADO, Freshservice, Graph, Work/Plane, SmartLeader, Anthropic)
+ *     parameters:
+ *       - { name: integration, in: query, schema: { type: string } }
+ *       - { name: limit, in: query, schema: { type: integer, default: 50 } }
+ *     responses:
+ *       200: { description: OK, content: { application/json: { schema: { type: object, properties: { errors: { type: array, items: { type: object } } } } } } }
+ *       403: { description: Acesso restrito ao Administrador, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+ */
+router.get('/admin/integration-errors', authenticate, requireAdmin, async (req, res) => {
+  const { integration, limit = 50 } = req.query;
+  const params = [];
+  let where = '';
+  if (integration) { params.push(integration); where = `WHERE integration=$${params.length}`; }
+  params.push(Math.min(parseInt(limit) || 50, 200));
+  const { rows } = await db.query(
+    `SELECT * FROM integration_error_log ${where} ORDER BY occurred_at DESC LIMIT $${params.length}`, params);
+  res.json({ errors: rows });
+});
+
+/**
+ * @openapi
+ * /admin/fix-requests:
+ *   get:
+ *     tags: [Admin — Logs de Integração]
+ *     summary: Lista solicitações de correção já criadas a partir de erros de integração
+ *     responses:
+ *       200: { description: OK, content: { application/json: { schema: { type: object, properties: { requests: { type: array, items: { type: object } } } } } } }
+ *       403: { description: Acesso restrito ao Administrador, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+ */
+router.get('/admin/fix-requests', authenticate, requireAdmin, async (req, res) => {
+  const { rows } = await db.query(
+    `SELECT fr.*, u.full_name as requested_by_name FROM integration_fix_requests fr
+     LEFT JOIN users u ON u.id = fr.requested_by ORDER BY fr.requested_at DESC LIMIT 100`);
+  res.json({ requests: rows });
+});
+
+/**
+ * @openapi
+ * /admin/fix-requests:
+ *   post:
+ *     tags: [Admin — Logs de Integração]
+ *     summary: Cria uma solicitação de correção — grava um arquivo em contexto/ lido automaticamente pela próxima sessão do Claude Code
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [integration, title]
+ *             properties:
+ *               error_log_id: { type: string, format: uuid }
+ *               integration: { type: string }
+ *               title: { type: string }
+ *               description: { type: string }
+ *     responses:
+ *       201: { description: Criada, content: { application/json: { schema: { type: object, properties: { request: { type: object } } } } } }
+ *       400: { description: Payload inválido, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+ *       403: { description: Acesso restrito ao Administrador, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+ */
+router.post('/admin/fix-requests', authenticate, requireAdmin, [
+  body('integration').isString().trim().notEmpty(),
+  body('title').isString().trim().notEmpty()
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ error: errors.array()[0].msg });
+
+  const { error_log_id, integration, title, description } = req.body;
+  try {
+    let errorEntry = null;
+    if (error_log_id) {
+      const { rows } = await db.query('SELECT * FROM integration_error_log WHERE id=$1', [error_log_id]);
+      errorEntry = rows[0] || null;
+    }
+
+    const contextoFile = fixRequestFile.writeFixRequestFile({
+      integration, title, description, errorEntry, requestedByName: req.user.full_name
+    });
+
+    const { rows: [reqRow] } = await db.query(
+      `INSERT INTO integration_fix_requests (error_log_id, integration, title, description, contexto_file, requested_by)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [error_log_id || null, integration, title, description || null, contextoFile, req.user.id]);
+
+    await db.query(
+      `INSERT INTO audit_log (user_id, action, entity_type, entity_id, ip_address, metadata) VALUES ($1,'fix_request_created','integration_fix_request',$2,$3,$4)`,
+      [req.user.id, reqRow.id, req.ip, JSON.stringify({ integration, title, contexto_file: contextoFile })]);
+
+    res.status(201).json({ request: reqRow });
+  } catch (err) {
+    console.error('[ADMIN FIX REQUESTS]', err.message);
+    res.status(500).json({ error: 'Erro ao criar solicitação de correção' });
+  }
+});
+
+/**
+ * @openapi
+ * /admin/fix-requests/{id}:
+ *   patch:
+ *     tags: [Admin — Logs de Integração]
+ *     summary: Atualiza o status de uma solicitação de correção
+ *     parameters:
+ *       - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema: { type: object, required: [status], properties: { status: { type: string, enum: [open, done, dismissed] } } }
+ *     responses:
+ *       200: { description: OK, content: { application/json: { schema: { type: object, properties: { request: { type: object } } } } } }
+ *       400: { description: Status inválido, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+ *       403: { description: Acesso restrito ao Administrador, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+ *       404: { description: Solicitação não encontrada, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+ */
+router.patch('/admin/fix-requests/:id', authenticate, requireAdmin, [
+  body('status').isIn(['open', 'done', 'dismissed'])
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ error: errors.array()[0].msg });
+
+  const resolvedAt = req.body.status === 'open' ? null : new Date();
+  const { rows } = await db.query(
+    `UPDATE integration_fix_requests SET status=$1, resolved_at=$2 WHERE id=$3 RETURNING *`,
+    [req.body.status, resolvedAt, req.params.id]);
+  if (!rows.length) return res.status(404).json({ error: 'Solicitação não encontrada' });
+  res.json({ request: rows[0] });
 });
 
 module.exports = router;

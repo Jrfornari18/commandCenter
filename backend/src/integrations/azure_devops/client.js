@@ -6,6 +6,7 @@
 const axios = require('axios');
 const db = require('../../db');
 const credentialStore = require('../../services/credentialStore');
+const errorLog = require('../../services/errorLog');
 
 const getAdoBase = () => `https://dev.azure.com/${credentialStore.get('ADO_ORG') || 'copastur-dev'}`;
 const getPat = () => credentialStore.get('ADO_PAT');
@@ -107,6 +108,7 @@ async function syncProject(project) {
   } catch (err) {
     await db.query(`UPDATE ado_sync_log SET status='error', error_msg=$1, finished_at=NOW() WHERE id=$2`, [err.message, log.id]);
     await db.query(`UPDATE integration_sync SET status='error', error_msg=$1 WHERE integration='azure_devops'`, [err.message]);
+    await errorLog.logIntegrationError({ integration: 'azure_devops', operation: `syncProject:${project}`, err });
     throw err;
   }
 }

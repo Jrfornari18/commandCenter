@@ -5,6 +5,7 @@
 const axios = require('axios');
 const db = require('../../db');
 const credentialStore = require('../../services/credentialStore');
+const errorLog = require('../../services/errorLog');
 
 function getHeaders() {
   const apiKey = credentialStore.get('SMARTLEADER_API_KEY');
@@ -19,6 +20,7 @@ async function fetchOKRs(cycle = 'Q2-2026') {
     return res.data.objectives || res.data || [];
   } catch (err) {
     console.warn('[SmartLeader] API unavailable, using mock data:', err.message);
+    await errorLog.logIntegrationError({ integration: 'smartleader', operation: 'fetchOKRs', err });
     return getMockOKRs(cycle);
   }
 }

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { chatAPI, dashAPI, integAPI, credentialsAPI } from '../services/api';
+import { chatAPI, dashAPI, integAPI, credentialsAPI, errorLogAPI } from '../services/api';
 
 // ── Constants ──────────────────────────────────────────────────
 const EXPECTATIVAS = [
@@ -44,6 +44,7 @@ const I = {
   okr: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>,
   users: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>,
   key: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="7.5" cy="15.5" r="5.5"/><path d="M21 2l-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"/></svg>,
+  alert: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>,
   sync: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>,
   plus: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>,
   up: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>,
@@ -98,6 +99,9 @@ export default function AppPage() {
   const [credSaving, setCredSaving] = useState({});
   const [credMsg, setCredMsg] = useState({});
   const [credTest, setCredTest] = useState({});
+  const [errLogData, setErrLogData] = useState({ errors: [], requests: [] });
+  const [fixDraft, setFixDraft] = useState({});
+  const [fixSaving, setFixSaving] = useState({});
   const [toast, setToast] = useState(null);
   const chatRef = useRef(null);
   const taRef = useRef(null);
@@ -123,6 +127,7 @@ export default function AppPage() {
     if (panel === 'graph') loadGraph();
     if (panel === 'admin') loadUsers();
     if (panel === 'credentials') loadCredentials();
+    if (panel === 'errorlog') loadErrorLog();
   }, [panel]);
 
   // Work TI Boards — poll leve (só lê o Postgres, não dispara sync no Plane) enquanto o painel estiver aberto
@@ -174,6 +179,46 @@ export default function AppPage() {
     } catch (e) {
       setCredTest(p => ({ ...p, [integration]: { testing: false, ok: false, message: e.response?.data?.error || e.response?.data?.message || 'Erro ao testar conexão' } }));
     }
+  };
+
+  const loadErrorLog = async () => {
+    try {
+      const [errs, reqs] = await Promise.all([errorLogAPI.list(), errorLogAPI.fixRequests()]);
+      setErrLogData({ errors: errs.data.errors, requests: reqs.data.requests });
+    } catch (_) {}
+  };
+
+  const toggleFixDraft = (errorEntry) => {
+    setFixDraft(p => ({
+      ...p,
+      [errorEntry.id]: p[errorEntry.id]?.open
+        ? null
+        : { open: true, title: `Corrigir erro em ${errorEntry.integration}`, description: errorEntry.error_message }
+    }));
+  };
+
+  const submitFixRequest = async (errorEntry) => {
+    const draft = fixDraft[errorEntry.id];
+    if (!draft?.title?.trim()) return;
+    setFixSaving(p => ({ ...p, [errorEntry.id]: true }));
+    try {
+      await errorLogAPI.createFixRequest({
+        error_log_id: errorEntry.id, integration: errorEntry.integration,
+        title: draft.title, description: draft.description
+      });
+      setFixDraft(p => ({ ...p, [errorEntry.id]: null }));
+      showToast('success', 'Solicitação de correção criada — nota gravada em contexto/.');
+      await loadErrorLog();
+    } catch (e) {
+      showToast('error', e.response?.data?.error || 'Erro ao criar solicitação de correção.');
+    } finally {
+      setFixSaving(p => ({ ...p, [errorEntry.id]: false }));
+    }
+  };
+
+  const updateFixStatus = async (id, status) => {
+    try { await errorLogAPI.updateFixRequest(id, status); await loadErrorLog(); showToast('success', 'Status atualizado.'); }
+    catch (e) { showToast('error', e.response?.data?.error || 'Erro ao atualizar status.'); }
   };
 
   const syncAll = async () => {
@@ -255,10 +300,11 @@ export default function AppPage() {
   ];
   const adminItems = user?.role_name === 'admin' ? [
     { id: 'admin', label: 'Usuários', icon: I.users },
-    { id: 'credentials', label: 'API Keys', icon: I.key }
+    { id: 'credentials', label: 'API Keys', icon: I.key },
+    { id: 'errorlog', label: 'Logs de Integração', icon: I.alert, badge: errLogData.errors.length || undefined }
   ] : [];
 
-  const titles = { chat: 'Strategic Chat', dashboard: 'Executive Dashboard', expectativas: '7 Expectativas — Copastur', ado: 'Azure DevOps — copastur-dev', freshservice: 'Freshservice — ITSM', work: 'Work TI Boards — 4 Boards', graph: 'Microsoft Graph — Calendar & Email', okr: 'SmartLeader — OKRs', admin: 'Gestão de Usuários', credentials: 'Configurações — API Keys' };
+  const titles = { chat: 'Strategic Chat', dashboard: 'Executive Dashboard', expectativas: '7 Expectativas — Copastur', ado: 'Azure DevOps — copastur-dev', freshservice: 'Freshservice — ITSM', work: 'Work TI Boards — 4 Boards', graph: 'Microsoft Graph — Calendar & Email', okr: 'SmartLeader — OKRs', admin: 'Gestão de Usuários', credentials: 'Configurações — API Keys', errorlog: 'Logs de Erros de Integração' };
 
   const priCol = p => p === 'critica' || p === 'urgent' ? 'rH' : p === 'alta' || p === 'high' ? 'rM' : 'rL';
   const priLbl = p => ({ critica:'Crítica', urgent:'Urgente', alta:'Alta', high:'Alta', media:'Média', medium:'Média', baixa:'Baixa', low:'Baixa' }[p] || p);
@@ -665,6 +711,74 @@ export default function AppPage() {
                 </div>
               ))}
               {!credGroups.length && <div style={{ color: 'var(--t2)', fontSize: 13, textAlign: 'center', padding: 40 }}>Carregando...</div>}
+            </div>
+          </div>
+        )}
+
+        {/* ── ADMIN: LOGS DE INTEGRAÇÃO ───────────────────────── */}
+        {user?.role_name === 'admin' && (
+          <div className={`panel ${panel === 'errorlog' ? 'active' : ''}`}>
+            <div className="panel-scroll">
+              <p style={{ fontSize: 12, color: 'var(--t2)', marginBottom: 18, lineHeight: 1.6 }}>
+                Erros recentes ao chamar APIs externas (Azure DevOps, Freshservice, Microsoft Graph, Work/Plane, SmartLeader, Anthropic). Solicite uma correção para gerar uma nota em <code>contexto/</code>, lida automaticamente pela próxima sessão do Claude Code.
+              </p>
+
+              <div className="sec-lbl">Erros recentes ({errLogData.errors.length})</div>
+              {!errLogData.errors.length && <div style={{ color: 'var(--t2)', fontSize: 13, textAlign: 'center', padding: 32 }}>Nenhum erro registrado.</div>}
+              {errLogData.errors.map(e => (
+                <div key={e.id} className="integ-card" style={{ marginBottom: 10 }}>
+                  <div className="integ-card-top" style={{ justifyContent: 'space-between' }}>
+                    <div>
+                      <div className="integ-name">{e.integration}{e.operation ? ` · ${e.operation}` : ''}</div>
+                      <div style={{ fontSize: 11, color: 'var(--t2)' }}>{fmtDate(e.occurred_at)} {fmtTime(e.occurred_at)}{e.http_status ? ` · HTTP ${e.http_status}` : ''}</div>
+                    </div>
+                    <button className="btn-sec" onClick={() => toggleFixDraft(e)}>
+                      {fixDraft[e.id]?.open ? 'Cancelar' : 'Solicitar correção'}
+                    </button>
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--t1)', marginTop: 6 }}>{e.error_message}</div>
+                  {fixDraft[e.id]?.open && (
+                    <div style={{ marginTop: 10, paddingTop: 10, borderTop: '.5px solid var(--b0)' }}>
+                      <input
+                        className="form-input" style={{ marginBottom: 8 }}
+                        value={fixDraft[e.id].title}
+                        onChange={ev => setFixDraft(p => ({ ...p, [e.id]: { ...p[e.id], title: ev.target.value } }))}
+                        placeholder="Título da solicitação"
+                      />
+                      <textarea
+                        className="form-input" rows={3}
+                        value={fixDraft[e.id].description}
+                        onChange={ev => setFixDraft(p => ({ ...p, [e.id]: { ...p[e.id], description: ev.target.value } }))}
+                        placeholder="Descrição / contexto adicional para o Claude Code"
+                      />
+                      <button className="btn-primary" style={{ marginTop: 8 }} disabled={fixSaving[e.id] || !fixDraft[e.id].title?.trim()} onClick={() => submitFixRequest(e)}>
+                        {fixSaving[e.id] ? 'Enviando...' : 'Criar solicitação'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              <div className="sec-lbl" style={{ marginTop: 24 }}>Solicitações de correção</div>
+              {!errLogData.requests.length && <div style={{ color: 'var(--t2)', fontSize: 13, textAlign: 'center', padding: 32 }}>Nenhuma solicitação criada ainda.</div>}
+              {errLogData.requests.map(r => (
+                <div key={r.id} className="integ-card" style={{ marginBottom: 10 }}>
+                  <div className="integ-card-top" style={{ justifyContent: 'space-between' }}>
+                    <div>
+                      <div className="integ-name">{r.title}</div>
+                      <div style={{ fontSize: 11, color: 'var(--t2)' }}>{r.integration} · {r.requested_by_name || '—'} · {fmtDate(r.requested_at)} · <code>{r.contexto_file}</code></div>
+                    </div>
+                    <span className={`tag ${r.status === 'done' ? 'tag-ok' : r.status === 'dismissed' ? 'tag-err' : 'tag-warn'}`}>{r.status}</span>
+                  </div>
+                  {r.description && <div style={{ fontSize: 12, color: 'var(--t1)', marginTop: 6 }}>{r.description}</div>}
+                  {r.status === 'open' && (
+                    <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                      <button className="btn-sec" onClick={() => updateFixStatus(r.id, 'done')}>Marcar como resolvido</button>
+                      <button className="btn-sec" onClick={() => updateFixStatus(r.id, 'dismissed')}>Descartar</button>
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           </div>
         )}

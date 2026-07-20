@@ -33,6 +33,8 @@ services:
       CORS_ORIGIN: http://localhost:3000
     depends_on: { postgres: { condition: service_healthy } }
     ports: ["3001:3001"]
+    volumes:
+      - ./contexto:/app/contexto
     networks: [net]
 
   frontend:

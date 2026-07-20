@@ -7,6 +7,7 @@
 const axios = require('axios');
 const db = require('../../db');
 const credentialStore = require('../../services/credentialStore');
+const errorLog = require('../../services/errorLog');
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
 const getTenantId = () => credentialStore.get('AZURE_TENANT_ID') || '5ffc8daf-9a54-46be-9c74-c98d30a2a81a';
@@ -73,6 +74,7 @@ async function syncCalendar(userId) {
     return { synced };
   } catch (err) {
     await db.query(`UPDATE integration_sync SET status='error', error_msg=$1 WHERE integration='microsoft_graph'`, [err.message]);
+    await errorLog.logIntegrationError({ integration: 'microsoft_graph', operation: 'syncCalendar', err });
     throw err;
   }
 }
@@ -109,6 +111,7 @@ async function syncEmail(userId) {
     }
     return { synced };
   } catch (err) {
+    await errorLog.logIntegrationError({ integration: 'microsoft_graph', operation: 'syncEmail', err });
     throw err;
   }
 }
@@ -144,15 +147,23 @@ async function sendEmail(to, subject, body, approvedByUserId) {
 
 // MSAL OAuth URL builder (for frontend redirect)
 function getAuthUrl(state) {
+  const tenantId = getTenantId();
+  const clientId = credentialStore.get('AZURE_CLIENT_ID');
+  const redirectUri = credentialStore.get('AZURE_REDIRECT_URI');
+
+  console.log("TENANT:", tenantId);
+  console.log("CLIENT:", clientId);
+  console.log("REDIRECT:", redirectUri);
+
   const params = new URLSearchParams({
-    client_id: credentialStore.get('AZURE_CLIENT_ID'),
+    client_id: clientId,
     response_type: 'code',
-    redirect_uri: credentialStore.get('AZURE_REDIRECT_URI'),
+    redirect_uri: redirectUri,
     scope: 'openid profile email ' + (credentialStore.get('GRAPH_SCOPES') || 'User.Read Calendars.Read Mail.Read'),
     state,
     response_mode: 'query'
   });
-  return `https://login.microsoftonline.com/${getTenantId()}/oauth2/v2.0/authorize?${params}`;
+  return `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize?${params}`;
 }
 
 module.exports = { syncCalendar, syncEmail, getUpcomingEvents, getRecentEmails, sendEmail, getAuthUrl };

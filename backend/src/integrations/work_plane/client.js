@@ -16,6 +16,7 @@
 const axios = require('axios');
 const db = require('../../db');
 const credentialStore = require('../../services/credentialStore');
+const errorLog = require('../../services/errorLog');
 
 const getBaseUrl = () => credentialStore.get('WORK_API_URL') || 'https://work.cnext.app/api/plane/v1/workspaces/copastur';
 
@@ -85,16 +86,21 @@ async function upsertIssuesBatch(issues, projectId) {
 }
 
 async function syncBoard(projectId, projectName) {
-  await db.query(`
-    INSERT INTO work_projects (plane_id, name, is_ti_board, synced_at)
-    VALUES ($1, $2, TRUE, NOW())
-    ON CONFLICT (plane_id) DO UPDATE SET name=EXCLUDED.name, synced_at=NOW()`,
-    [projectId, projectName]
-  );
+  try {
+    await db.query(`
+      INSERT INTO work_projects (plane_id, name, is_ti_board, synced_at)
+      VALUES ($1, $2, TRUE, NOW())
+      ON CONFLICT (plane_id) DO UPDATE SET name=EXCLUDED.name, synced_at=NOW()`,
+      [projectId, projectName]
+    );
 
-  const issues = await paginatedFetch(`${getBaseUrl()}/projects/${projectId}/issues/`, { expand: 'state' });
-  if (issues.length) await upsertIssuesBatch(issues, projectId);
-  return issues.length;
+    const issues = await paginatedFetch(`${getBaseUrl()}/projects/${projectId}/issues/`, { expand: 'state' });
+    if (issues.length) await upsertIssuesBatch(issues, projectId);
+    return issues.length;
+  } catch (err) {
+    await errorLog.logIntegrationError({ integration: 'work_plane', operation: `syncBoard:${projectName}`, err });
+    throw err;
+  }
 }
 
 async function syncTIBoards() {
