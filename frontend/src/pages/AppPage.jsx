@@ -90,6 +90,7 @@ export default function AppPage() {
   const [showUserModal, setShowUserModal] = useState(false);
   const [newUser, setNewUser] = useState({ email: '', full_name: '', role_name: 'cto', password: 'Copastur@2025' });
   const [adoData, setAdoData] = useState({ workstreams: [], items: [] });
+  const [adoReport, setAdoReport] = useState(null);
   const [fsData, setFsData] = useState({ tickets: [], kpis: {} });
   const [workData, setWorkData] = useState({ boards: [], kpis: {}, issues: [] });
   const [okrData, setOkrData] = useState({ objectives: [] });
@@ -120,7 +121,7 @@ export default function AppPage() {
   useEffect(() => { if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight; }, [msgs, aiLoading]);
   useEffect(() => {
     if (panel === 'dashboard') loadDash();
-    if (panel === 'ado') loadAdo();
+    if (panel === 'ado') { loadAdo(); loadAdoReport(); }
     if (panel === 'freshservice') loadFs();
     if (panel === 'work') loadWork();
     if (panel === 'okr') loadOkr();
@@ -140,6 +141,7 @@ export default function AppPage() {
   const loadConvs = async () => { try { const r = await chatAPI.list(); setConvs(r.data.conversations); } catch (_) {} };
   const loadDash = async () => { try { const r = await dashAPI.summary(); setDashData(r.data); } catch (_) {} };
   const loadAdo = async () => { try { const [ws, items] = await Promise.all([integAPI.adoWorkstreams(), integAPI.adoItems({ limit: 30 })]); setAdoData({ workstreams: ws.data.workstreams, items: items.data.items }); } catch (_) {} };
+  const loadAdoReport = async () => { try { const res = await integAPI.adoReportLatest(); setAdoReport(res.data.snapshot?.report_data || null); } catch (_) {} };
   const loadFs = async () => { try { const r = await integAPI.fsTickets(25); setFsData({ tickets: r.data.tickets, kpis: r.data.kpis }); } catch (_) {} };
   const loadWork = async () => { try { const [b, i] = await Promise.all([integAPI.workBoards(), integAPI.workIssues({ limit: 30 })]); setWorkData({ boards: b.data.boards, kpis: b.data.kpis, issues: i.data.issues }); } catch (_) {} };
   const loadOkr = async () => { try { const r = await integAPI.okrSummary('Q2-2026'); setOkrData({ objectives: r.data.objectives, disabled: r.data.disabled }); } catch (_) {} };
@@ -523,6 +525,50 @@ export default function AppPage() {
               </table>
             </>}
             {adoData.items.length === 0 && <div style={{ color: 'var(--t2)', fontSize: 13, textAlign: 'center', padding: 40 }}>Sem dados sincronizados. Clique em "Sincronizar ADO" para buscar dados do Azure DevOps.</div>}
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '28px 0 16px' }}>
+              <div className="sec-lbl" style={{ margin: 0 }}>Relatório Executivo Semanal{adoReport?.at ? ` — gerado em ${new Date(adoReport.at).toLocaleString('pt-BR')}` : ''}</div>
+              <button className="integ-sync-btn" onClick={() => runSync(async () => { await integAPI.adoReportSync(); await loadAdoReport(); }, 'Relatório ADO')}>⟳ Atualizar Relatório</button>
+            </div>
+            {adoReport && <>
+              <div className="metrics-grid" style={{ marginBottom: 16 }}>
+                {[
+                  { l: 'Criados (semana)', v: adoReport.week?.created ?? '—' },
+                  { l: 'Fechados (semana)', v: adoReport.week?.closed ?? '—' },
+                  { l: 'Throughput Trimestre', v: `${adoReport.quarter?.throughput ?? 0}%` },
+                  { l: 'Epics Concluídos (Q2-2026)', v: `${adoReport.epics?.global?.pct ?? 0}%` },
+                ].map((m, i) => <div key={i} className="metric-card"><div className="metric-lbl">{m.l}</div><div className="metric-val">{m.v}</div></div>)}
+              </div>
+              {adoReport.projects?.length > 0 && <>
+                <div className="sec-lbl">Ranking de Projetos</div>
+                <table className="data-table" style={{ marginBottom: 20 }}>
+                  <thead><tr><th>Projeto</th><th>Criados</th><th>Fechados</th><th>Throughput</th><th>Saldo</th><th>Tendência</th></tr></thead>
+                  <tbody>{adoReport.projects.slice(0, 10).map((p, i) => (
+                    <tr key={i}>
+                      <td>{p.project}</td><td>{p.totalCreated}</td><td>{p.totalClosed}</td>
+                      <td>{p.throughput}%</td>
+                      <td><span className={`tag ${p.balance >= 0 ? 'tag-ok' : 'tag-err'}`}>{p.balance >= 0 ? '+' : ''}{p.balance}</span></td>
+                      <td>{p.trend === 'up' ? '↑' : p.trend === 'down' ? '↓' : '→'}</td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </>}
+              {adoReport.epics?.epics?.length > 0 && <>
+                <div className="sec-lbl">Epics — {adoReport.epics.project}</div>
+                <table className="data-table">
+                  <thead><tr><th>Epic</th><th>Iteração</th><th>Responsável</th><th>Progresso</th></tr></thead>
+                  <tbody>{adoReport.epics.epics.slice(0, 15).map((e, i) => (
+                    <tr key={i}>
+                      <td style={{ maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.title}</td>
+                      <td>{e.iteration || '—'}</td>
+                      <td>{e.assignee}</td>
+                      <td><div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><span>{e.completionPct}%</span><div className="prog-bar" style={{ flex: 1 }}><div className={`prog-fill ${e.completionPct > 60 ? 'prog-green' : e.completionPct > 30 ? 'prog-amber' : 'prog-red'}`} style={{ width: `${e.completionPct}%` }} /></div></div></td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </>}
+            </>}
+            {!adoReport && <div style={{ color: 'var(--t2)', fontSize: 13, textAlign: 'center', padding: 40 }}>Sem relatório gerado ainda. Clique em "Atualizar Relatório" (pode levar alguns minutos — consulta o ADO em tempo real).</div>}
           </div>
         </div>
 

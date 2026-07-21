@@ -44,6 +44,12 @@ if (process.env.NODE_ENV === 'production') {
     try { await syncRoutine.syncADO(); } catch (e) { console.error('[CRON ADO]', e.message); }
   });
 
+  // Azure DevOps — relatório executivo semanal (quarter/projetos/epics/tags/backlog)
+  cron.schedule(process.env.SYNC_ADO_REPORT_CRON || '0 11 * * 1', async () => {
+    console.log('[CRON] Syncing Azure DevOps weekly report...');
+    try { await syncRoutine.syncADOReport(); } catch (e) { console.error('[CRON ADO REPORT]', e.message); }
+  });
+
   // Freshservice — every 2 hours
   cron.schedule(process.env.SYNC_FS_CRON || '0 */2 * * *', async () => {
     console.log('[CRON] Syncing Freshservice...');

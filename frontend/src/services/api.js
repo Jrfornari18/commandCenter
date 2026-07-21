@@ -53,6 +53,9 @@ export const integAPI = {
   adoWorkstreams: () => API.get('/integrations/ado/workstreams'),
   adoItems: (params) => API.get('/integrations/ado/items', { params }),
   adoSync: () => API.post('/integrations/ado/sync'),
+  // ADO — Relatório executivo (quarter/projetos/epics)
+  adoReportLatest: () => API.get('/integrations/ado/report/latest'),
+  adoReportSync: () => API.post('/integrations/ado/report/sync'),
   // Freshservice
   fsTickets: (limit) => API.get('/integrations/freshservice/tickets', { params: { limit } }),
   fsSync: () => API.post('/integrations/freshservice/sync'),

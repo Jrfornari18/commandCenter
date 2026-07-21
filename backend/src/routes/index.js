@@ -5,6 +5,7 @@ const { body, validationResult } = require('express-validator');
 const db = require('../db');
 const { authenticate } = require('../middleware/auth');
 const adoClient = require('../integrations/azure_devops/client');
+const adoReportService = require('../integrations/azure_devops/reportService');
 const graphClient = require('../integrations/microsoft_graph/client');
 const fsClient = require('../integrations/freshservice/client');
 const workClient = require('../integrations/work_plane/client');
@@ -441,6 +442,189 @@ router.post('/integrations/ado/sync', authenticate, async (req, res) => {
       total += synced;
     }
     res.json({ synced: total, projects });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Azure DevOps — Relatórios executivos (quarter/ranking de projetos/epics/tags/backlog)
+/**
+ * @openapi
+ * /integrations/ado/report/latest:
+ *   get:
+ *     tags: [Integrations — Azure DevOps]
+ *     summary: Último snapshot de relatório semanal cacheado (rápido, sem chamar o ADO)
+ *     responses:
+ *       200: { description: OK }
+ */
+router.get('/integrations/ado/report/latest', authenticate, async (req, res) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT id, report_data, quarter, generated_at FROM devops_snapshots
+       WHERE report_type = 'weekly' ORDER BY generated_at DESC LIMIT 1`
+    );
+    res.json({ snapshot: rows[0] || null });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * @openapi
+ * /integrations/ado/report/sync:
+ *   post:
+ *     tags: [Integrations — Azure DevOps]
+ *     summary: Recalcula o relatório semanal via WIQL ao vivo e salva um novo snapshot
+ *     responses:
+ *       200: { description: OK }
+ *       500: { description: Erro, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+ */
+router.post('/integrations/ado/report/sync', authenticate, async (req, res) => {
+  try {
+    const result = await syncRoutine.syncADOReport();
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * @openapi
+ * /integrations/ado/report/quarter:
+ *   get:
+ *     tags: [Integrations — Azure DevOps]
+ *     summary: KPIs globais do trimestre corrente com evolução mensal (ao vivo)
+ *     responses:
+ *       200: { description: OK }
+ */
+router.get('/integrations/ado/report/quarter', authenticate, async (req, res) => {
+  try {
+    res.json(await adoReportService.getQuarterReport(adoReportService.getQuarterMonths()));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * @openapi
+ * /integrations/ado/report/projects:
+ *   get:
+ *     tags: [Integrations — Azure DevOps]
+ *     summary: Ranking de projetos monitorados com breakdown mensal (ao vivo)
+ *     responses:
+ *       200: { description: OK }
+ */
+router.get('/integrations/ado/report/projects', authenticate, async (req, res) => {
+  try {
+    res.json(await adoReportService.getProjectBreakdown(adoReportService.getQuarterMonths()));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * @openapi
+ * /integrations/ado/report/epics:
+ *   get:
+ *     tags: [Integrations — Azure DevOps]
+ *     summary: Hierarquia de epics com completude (ao vivo)
+ *     parameters:
+ *       - { name: project, in: query, schema: { type: string, default: Q2-2026 } }
+ *     responses:
+ *       200: { description: OK }
+ */
+router.get('/integrations/ado/report/epics', authenticate, async (req, res) => {
+  try {
+    res.json(await adoReportService.getEpicsHierarchy(req.query.project || 'Q2-2026'));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * @openapi
+ * /integrations/ado/report/tags:
+ *   get:
+ *     tags: [Integrations — Azure DevOps]
+ *     summary: Vínculo estratégia→execução via tags (ao vivo)
+ *     parameters:
+ *       - { name: tags, in: query, schema: { type: string }, description: 'CSV de tags — default lista estratégica fixa' }
+ *     responses:
+ *       200: { description: OK }
+ */
+router.get('/integrations/ado/report/tags', authenticate, async (req, res) => {
+  try {
+    const tags = req.query.tags ? req.query.tags.split(',').map(t => t.trim()).filter(Boolean) : null;
+    res.json(await adoReportService.getTagLinks(tags));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * @openapi
+ * /integrations/ado/report/backlog:
+ *   get:
+ *     tags: [Integrations — Azure DevOps]
+ *     summary: Backlog ativo por projeto (ao vivo)
+ *     parameters:
+ *       - { name: project, in: query, schema: { type: string } }
+ *       - { name: min, in: query, schema: { type: integer, default: 5 } }
+ *     responses:
+ *       200: { description: OK }
+ */
+router.get('/integrations/ado/report/backlog', authenticate, async (req, res) => {
+  try {
+    const { project, min } = req.query;
+    res.json(await adoReportService.getBacklog(project || null, parseInt(min) || 5));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * @openapi
+ * /integrations/ado/report/query:
+ *   get:
+ *     tags: [Integrations — Azure DevOps]
+ *     summary: Query customizada (WIQL montado a partir de filtros validados)
+ *     parameters:
+ *       - { name: type, in: query, schema: { type: string, enum: [created, closed, changed] } }
+ *       - { name: days, in: query, schema: { type: integer, default: 7 } }
+ *       - { name: project, in: query, schema: { type: string } }
+ *       - { name: workItemType, in: query, schema: { type: string } }
+ *       - { name: state, in: query, schema: { type: string } }
+ *       - { name: tag, in: query, schema: { type: string } }
+ *     responses:
+ *       200: { description: OK }
+ */
+router.get('/integrations/ado/report/query', authenticate, async (req, res) => {
+  try {
+    const { type, days, project, workItemType, state, tag } = req.query;
+    const d = parseInt(days) || 7;
+    const esc = adoReportService.escapeWiql;
+    const conds = [];
+    if (type === 'created') conds.push(`[System.CreatedDate] >= @Today - ${d}`);
+    else if (type === 'closed') { conds.push("[System.State] IN ('Closed','Resolved','Tested')"); conds.push(`[System.ChangedDate] >= @Today - ${d}`); }
+    else conds.push(`[System.ChangedDate] >= @Today - ${d}`);
+    if (project) conds.push(`[System.TeamProject] = '${esc(project)}'`);
+    if (workItemType) conds.push(`[System.WorkItemType] = '${esc(workItemType)}'`);
+    if (state) conds.push(`[System.State] = '${esc(state)}'`);
+    if (tag) conds.push(`[System.Tags] CONTAINS '${esc(tag)}'`);
+    conds.push("[System.State] <> 'Removed'");
+
+    const q = `SELECT [System.Id] FROM WorkItems WHERE ${conds.join(' AND ')} ORDER BY [System.ChangedDate] DESC`;
+    const ids = await adoReportService.wiql(q);
+    const items = await adoReportService.fetchItems(ids.slice(0, 200));
+    const mapped = items.map(i => ({
+      id: adoReportService.gf(i, 'System.Id'), title: adoReportService.gf(i, 'System.Title'),
+      state: adoReportService.gf(i, 'System.State'), type: adoReportService.gf(i, 'System.WorkItemType'),
+      assignee: adoReportService.assignee(i), project: adoReportService.proj(i),
+      iteration: adoReportService.gf(i, 'System.IterationPath'), tags: adoReportService.gf(i, 'System.Tags'),
+      priority: adoReportService.gf(i, 'Microsoft.VSTS.Common.Priority'),
+      created: adoReportService.gf(i, 'System.CreatedDate'), changed: adoReportService.gf(i, 'System.ChangedDate'),
+    }));
+    res.json({ total: ids.length, items: mapped });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
